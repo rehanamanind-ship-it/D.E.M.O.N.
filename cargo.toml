@@ -1,0 +1,13 @@
+[package]
+name = "exe_intent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pyo3 = { version = "0.21", features = ["auto-initialize", "extension-module"] }
+goblin = "0.8"                # portable PE/ELF/Mach-O parser
+# (optional) lief-rs if you need import extraction
+# For strings extraction, use memchr or regex
+
+[lib]
+crate-type = ["cdylib"]
