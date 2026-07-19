@@ -196,3 +196,7 @@ FILES IN THIS PROJECT
   Cargo.toml      – Rust dependencies and build settings
   ai_brain.py     – Python AI brain (model loading, inference, conversion)
   README.txt      – This file
+
+
+
+WELL IF YOU DO NOT WANT TO ENTER THE DEPEDENCY HELL THEN YOU CAN RUN "setup.sh"
