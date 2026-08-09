@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-demon_analyser.py - Colourful curses CLI for EXE/script intent analysis.
+demon.py - Colourful curses CLI for EXE/script intent analysis.
 Banner: D.E.M.O.N. in red, "made by rehan aman" below.
 Follows DRY, ETC, and is fully commented.
 """
