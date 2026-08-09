@@ -24,12 +24,12 @@ Detect suspicious patterns, imports, high entropy (packing), and get an AI‑pow
 ### 1. Install Python 3.9 or later
 
 ### 2. Clone the repository
-```bash
+
 git clone https://github.com/yourusername/intent-analyser.git
 cd intent-analyser
 
  Install Python dependencies
-bash
+
 
 pip install -r requirements.txt
 
@@ -66,23 +66,7 @@ python ultimate_analyser.py
     Use Export JSON to save the full result.
 
 
-    We need to produce a README.md and requirements.txt for the project. The user asked to add a nice README.md and a requirements.txt. We'll provide the content for both.
-
-We need to include installation instructions, usage, features, dependencies, compilation notes (Nuitka), etc. For requirements.txt, we list the main dependencies: llama-cpp-python (maybe with platform-specific instructions), pefile, pyelftools, macholib, dnfile, and optionally tkinter (usually built-in but may need system package). We'll write a comprehensive README.
-
-We'll output both files. Since the user requested to "add", we'll present them as separate code blocks.
-
-Let's create a detailed README with sections: Title, Features, Installation (including optional dependencies), Usage (GUI and CLI), Compilation (Nuitka), Configuration, Customization, License.
-
-Requirements.txt: we need to include the core packages. Also note that llama-cpp-python might have different binaries; we can simply list it.
-
-We'll also mention that tkinter is required for GUI (usually included in Python standard library but on some Linux distros need python3-tk).
-
-Let's proceed.
-
-I’ll provide a polished README.md and a comprehensive requirements.txt for your project.
-README.md
-markdown
+   
 
 # 🧠 Ultimate EXE Intent Analyser
 
@@ -110,7 +94,7 @@ Detect suspicious patterns, imports, high entropy (packing), and get an AI‑pow
 ### 1. Install Python 3.9 or later
 
 ### 2. Clone the repository
-```bash
+
 git clone https://github.com/yourusername/intent-analyser.git
 cd intent-analyser
 
