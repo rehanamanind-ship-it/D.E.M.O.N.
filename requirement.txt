@@ -11,8 +11,4 @@ pyelftools>=0.29
 macholib>=1.16.2
 dnfile>=0.12.1
 
-# Optional: for GUI (usually already present)
-# tkinter is part of the standard library, but on Linux you may need the system package.
-
-# For compilation (not runtime)
-nuitka>=1.9.0
+# optional : curses, not on windows
