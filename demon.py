@@ -13,6 +13,7 @@ import struct
 import time
 import logging
 from pathlib import Path
+from turtle import title
 from typing import List, Optional, Tuple, Dict, Any
 from dataclasses import dataclass, asdict
 
@@ -492,21 +493,23 @@ def analyse_file(file_path: Path, config: Config, use_cache: bool = True) -> Dic
     return result
 
 
-# ============================================================================
-# CURSES APPLICATION (UI)
+
+ # ============================================================================
+# CURSES APPLICATION
 # ============================================================================
 class CursesApp:
     """
     Main interactive curses interface for D.E.M.O.N.
     Displays a banner, menu, and scrollable analysis results.
+    All popups have fallback for small terminals.
     """
 
     def __init__(self, stdscr, config: Config):
         self.stdscr = stdscr
         self.config = config
-        self.current_result = None          # Latest analysis result
-        self.scroll_offset = 0              # For scrolling long reports
-        self.report_lines = []              # Cached lines for scrolling
+        self.current_result = None
+        self.scroll_offset = 0
+        self.report_lines = []
 
         # Setup colours
         curses.start_color()
@@ -516,7 +519,7 @@ class CursesApp:
         curses.init_pair(3, curses.COLOR_YELLOW, -1)   # Warnings
         curses.init_pair(4, curses.COLOR_CYAN, -1)     # Info
         curses.init_pair(5, curses.COLOR_MAGENTA, -1)  # Highlights
-        curses.init_pair(6, curses.COLOR_WHITE, curses.COLOR_BLUE) # Selected menu
+        curses.init_pair(6, curses.COLOR_WHITE, curses.COLOR_BLUE)  # Selected menu
 
         self.rows, self.cols = stdscr.getmaxyx()
         self.menu = [
@@ -544,7 +547,7 @@ class CursesApp:
             self.handle_key(key)
 
     def handle_key(self, key):
-        """Handle keyboard input."""
+        """Handle keyboard input with scroll support for reports."""
         if key == curses.KEY_UP:
             if self.current_result:
                 self.scroll_offset = max(0, self.scroll_offset - 1)
@@ -552,17 +555,12 @@ class CursesApp:
                 self.current_selection = (self.current_selection - 1) % len(self.menu)
         elif key == curses.KEY_DOWN:
             if self.current_result:
-                self.scroll_offset = min(
-                    len(self.report_lines) - self.available_lines() + 1,
-                    self.scroll_offset + 1
-                )
+                max_scroll = max(0, len(self.report_lines) - self.available_lines())
+                self.scroll_offset = min(max_scroll, self.scroll_offset + 1)
             else:
                 self.current_selection = (self.current_selection + 1) % len(self.menu)
         elif key == ord('\n') or key == ord(' '):
-            if self.current_result:
-                # If results shown, Enter does nothing; else enter menu
-                pass
-            else:
+            if not self.current_result:
                 _, action = self.menu[self.current_selection]
                 action()
         elif key == ord('q') or key == ord('Q'):
@@ -570,7 +568,7 @@ class CursesApp:
 
     def available_lines(self) -> int:
         """Number of lines available for content display."""
-        return self.rows - 12   # leave room for header, menu, status
+        return max(1, self.rows - 12)
 
     def draw_header(self):
         """Draw the big red banner and credit line."""
@@ -621,10 +619,10 @@ class CursesApp:
         self.stdscr.attroff(curses.color_pair(5))
 
     def draw_content(self):
-        """Display the analysis result or instructions."""
+        """Display the analysis result or instructions, with scroll indicators."""
         start_y = 10
         if self.current_result:
-            # Update report lines and scroll
+            # Build report lines if not cached
             if not self.report_lines:
                 full_report = self.current_result['report'] + "\n\nAI Verdict:\n" + self.current_result['ai_verdict']
                 self.report_lines = full_report.splitlines()
@@ -648,7 +646,8 @@ class CursesApp:
                 self.stdscr.attron(color)
                 self.stdscr.addstr(start_y + i, 2, line[:self.cols - 4])
                 self.stdscr.attroff(color)
-            # Show scroll indicators
+
+            # Scroll indicators
             if self.scroll_offset > 0:
                 self.stdscr.attron(curses.color_pair(3))
                 self.stdscr.addstr(start_y, self.cols - 2, "▲")
@@ -662,28 +661,70 @@ class CursesApp:
             self.stdscr.addstr(start_y, 2, "Select 'Analyse' to scan a file.")
             self.stdscr.attroff(curses.color_pair(4))
 
+    # ---------- Safe Input/Message Popups ----------
     def prompt_path(self, title: str) -> Optional[str]:
-        """Show a popup to input a file path."""
-        height, width = 5, 60
+        """
+        Show a popup to input a file path.
+        Falls back to inline input if terminal is too small.
+        """
+        height = 5
+        width = min(60, self.cols - 4)
+        # Check if we have enough space for a popup
+        if self.rows < height + 4 or self.cols < width + 4:
+            return self._inline_input(title)
+
         y = (self.rows - height) // 2
         x = (self.cols - width) // 2
-        win = curses.newwin(height, width, y, x)
+        try:
+            win = curses.newwin(height, width, y, x)
+        except curses.error:
+            return self._inline_input(title)
+
         win.border(0)
         win.attron(curses.color_pair(4))
-        win.addstr(0, 2, title)
+        win.addstr(0, 2, title[:width-4])
         win.attroff(curses.color_pair(4))
         win.addstr(2, 2, "Path: ")
         curses.echo()
-        path = win.getstr(2, 8, width - 10).decode('utf-8')
+        try:
+            path = win.getstr(2, 8, width - 10).decode('utf-8')
+        except curses.error:
+            path = ""
         curses.noecho()
         return path.strip()
 
+    def _inline_input(self, title: str) -> str:
+        """Fallback: prompt directly on the main screen."""
+        self.stdscr.clear()
+        self.draw_header()
+        self.stdscr.attron(curses.color_pair(4))
+        self.stdscr.addstr(10, 2, f"{title} (type path): ")
+        self.stdscr.attroff(curses.color_pair(4))
+        curses.echo()
+        path = self.stdscr.getstr(10, len(f"{title} (type path): ") + 2, self.cols - 10).decode('utf-8')
+        curses.noecho()
+        self.stdscr.refresh()
+        return path.strip()
+
     def show_message(self, msg: str, is_error: bool = False, wait: bool = False):
-        """Display a temporary popup message."""
-        height, width = 5, min(len(msg) + 10, self.cols - 4)
+        """
+        Display a temporary popup message.
+        Falls back to a one‑line display on the main screen if terminal is too small.
+        """
+        height = 5
+        width = min(len(msg) + 10, self.cols - 4)
+        if self.rows < height + 4 or self.cols < width + 4:
+            self._inline_message(msg, is_error, wait)
+            return
+
         y = (self.rows - height) // 2
         x = (self.cols - width) // 2
-        win = curses.newwin(height, width, y, x)
+        try:
+            win = curses.newwin(height, width, y, x)
+        except curses.error:
+            self._inline_message(msg, is_error, wait)
+            return
+
         win.border(0)
         if is_error:
             win.attron(curses.color_pair(1))
@@ -697,7 +738,18 @@ class CursesApp:
         else:
             win.getch()
 
-    # ---------- Menu actions ----------
+    def _inline_message(self, msg: str, is_error: bool, wait: bool):
+        """Fallback: show message on the main screen."""
+        color = curses.color_pair(1) if is_error else curses.color_pair(2)
+        self.stdscr.attron(color | curses.A_BOLD)
+        self.stdscr.addstr(10, 2, msg[:self.cols-4])
+        self.stdscr.attroff(color | curses.A_BOLD)
+        if wait:
+            time.sleep(0.5)
+        else:
+            self.stdscr.getch()
+
+    # ---------- Menu Actions ----------
     def analyse(self):
         """Analyse a user‑selected file."""
         path_str = self.prompt_path("Enter file path")
@@ -711,7 +763,7 @@ class CursesApp:
         try:
             result = analyse_file(file_path, self.config)
             self.current_result = result
-            self.report_lines = []   # reset for scrolling
+            self.report_lines = []
             self.scroll_offset = 0
         except Exception as e:
             self.show_message(f"Error: {e}", is_error=True)
@@ -741,15 +793,15 @@ class CursesApp:
         self.running = False
 
 
+# ============================================================================
+# ENTRY POINTS
+# ============================================================================
 def curses_main(stdscr, config):
     """Wrapper to start the curses application."""
     app = CursesApp(stdscr, config)
     app.run()
 
 
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
 def main():
     """Application entry point."""
     config = Config.load()
@@ -764,4 +816,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()                                  
