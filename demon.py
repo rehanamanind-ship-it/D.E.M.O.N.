@@ -9,11 +9,11 @@ import os
 import sys
 import json
 import hashlib
+import math
 import struct
 import time
 import logging
 from pathlib import Path
-from turtle import title
 from typing import List, Optional, Tuple, Dict, Any
 from dataclasses import dataclass, asdict
 
@@ -115,8 +115,8 @@ class Config:
                 with open(CONFIG_FILE, "r") as f:
                     data = json.load(f)
                     return cls(**data)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not load configuration: {e}. Using defaults.")
         return cls()
 
     def save(self) -> None:
@@ -140,7 +140,7 @@ def compute_entropy(data: bytes) -> float:
     for f in freq:
         if f:
             p = f / length
-            entropy -= p * (p.bit_length() - 1)   # log2(p)
+            entropy -= p * math.log2(p)
     return entropy
 
 
@@ -155,20 +155,22 @@ def extract_ascii_strings(data: bytes, min_len: int = 4) -> List[str]:
             if len(current) >= min_len:
                 strings.append(''.join(current))
             current = []
+    if len(current) >= min_len:
+        strings.append(''.join(current))
     return strings
 
 
-def filter_suspicious(strings: List[str], keywords: List[str]) -> List[str]:
+def filter_suspicious(strings: List[str], keywords: List[str], limit: int) -> List[str]:
     """
     Return strings that contain any keyword (case‑insensitive).
-    Deduplicates and limits to 30 entries for brevity.
+    Deduplicates and limits results according to the configuration.
     """
     result = []
     for s in strings:
         lower = s.lower()
         if any(k.lower() in lower for k in keywords):
             result.append(s)
-    return sorted(set(result))[:30]
+    return sorted(set(result))[:limit]
 
 
 # ============================================================================
@@ -239,7 +241,10 @@ def analyse_elf(data: bytes) -> Dict[str, Any]:
                 for tag in section.iter_tags():
                     if tag.entry.d_tag == 'DT_NEEDED':
                         if hasattr(tag, 'needed'):
-                            info["imports"].append(tag.needed.decode())
+                            needed = tag.needed
+                            info["imports"].append(
+                                needed.decode('utf-8', errors='ignore') if isinstance(needed, bytes) else str(needed)
+                            )
         for section in elffile.iter_sections():
             sec_data = section.data()
             entropy = compute_entropy(sec_data)
@@ -254,7 +259,7 @@ def analyse_elf(data: bytes) -> Dict[str, Any]:
     return info
 
 
-def analyse_macho(data: bytes) -> Dict[str, Any]:
+def analyse_macho(path: Path) -> Dict[str, Any]:
     """
     Parse Mach‑O and extract imported dylibs.
     Entropy and entry point are not fully extracted in this stub.
@@ -263,13 +268,13 @@ def analyse_macho(data: bytes) -> Dict[str, Any]:
     if not HAS_MACHOLIB:
         return info
     try:
-        from io import BytesIO
-        macho = MachO(BytesIO(data))
+        macho = MachO(str(path))
         for header in macho.headers:
-            for cmd in header.commands:
-                if cmd.cmd.cmd == LC_LOAD_DYLIB:
-                    dylib = cmd.cmd.dylib.name.decode('utf-8', errors='ignore')
-                    info["imports"].append(dylib)
+            for load_cmd, _, dylib_data in header.commands:
+                if load_cmd.cmd == LC_LOAD_DYLIB and dylib_data:
+                    if isinstance(dylib_data, bytes):
+                        dylib_data = dylib_data.split(b'\0', 1)[0].decode('utf-8', errors='ignore')
+                    info["imports"].append(str(dylib_data))
     except Exception as e:
         logger.error(f"Mach-O analysis error: {e}")
     return info
@@ -283,13 +288,25 @@ def analyse_dotnet(data: bytes) -> Dict[str, Any]:
     if not HAS_DNFILE:
         return info
     try:
-        with dnfile.from_bytes(data) as pe:
-            info["entry"] = pe.OPTIONAL_HEADER.AddressOfEntryPoint
-            if hasattr(pe, 'net') and pe.net.metadata:
-                info["imports"] = [f"Assembly: {pe.net.metadata.Assembly.Name}"]
+        pe = dnfile.dnPE(data=data)
+        info["entry"] = pe.OPTIONAL_HEADER.AddressOfEntryPoint
+        assembly_table = getattr(getattr(pe.net, "mdtables", None), "Assembly", None)
+        rows = getattr(assembly_table, "rows", [])
+        if rows:
+            info["imports"] = [f"Assembly: {rows[0].Name}"]
     except Exception as e:
         logger.error(f".NET analysis error: {e}")
     return info
+
+
+def is_dotnet_assembly(data: bytes) -> bool:
+    """Identify PE files with a CLR header when dnfile is available."""
+    if not HAS_DNFILE:
+        return False
+    try:
+        return getattr(dnfile.dnPE(data=data), "net", None) is not None
+    except Exception:
+        return False
 
 
 def detect_script(data: bytes) -> Optional[str]:
@@ -321,7 +338,7 @@ def static_analysis(path: Path, config: Config) -> Tuple[str, Dict[str, Any]]:
     info = {}
     format_name = "Unknown"
     if data[:2] == b'MZ':
-        if data[0x40:0x44] == b'BSJB':
+        if is_dotnet_assembly(data):
             format_name = ".NET"
             info = analyse_dotnet(data)
         else:
@@ -332,7 +349,7 @@ def static_analysis(path: Path, config: Config) -> Tuple[str, Dict[str, Any]]:
         info = analyse_elf(data)
     elif data[:4] in (b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf', b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe'):
         format_name = "Mach-O"
-        info = analyse_macho(data)
+        info = analyse_macho(path)
     else:
         script_type = detect_script(data)
         if script_type:
@@ -341,7 +358,7 @@ def static_analysis(path: Path, config: Config) -> Tuple[str, Dict[str, Any]]:
             format_name = "Data"
 
     all_strings = extract_ascii_strings(data)
-    suspicious = filter_suspicious(all_strings, config.suspicious_keywords)
+    suspicious = filter_suspicious(all_strings, config.suspicious_keywords, config.max_strings)
 
     # Build the report
     report_lines = [f"Format: {format_name}"]
@@ -436,14 +453,35 @@ def ai_analyse(report: str, config: Config) -> str:
 # ============================================================================
 # CACHING (SHA‑256 based)
 # ============================================================================
-def get_cache_path(sha256: str) -> Path:
-    """Return the cache file path for a given SHA‑256 hash."""
-    return CACHE_DIR / f"{sha256}.json"
+def get_cache_path(cache_key: str) -> Path:
+    """Return the cache file path for a file and analysis-settings key."""
+    return CACHE_DIR / f"{cache_key}.json"
 
 
-def cache_result(sha256: str, report: str, info: Dict[str, Any], ai_verdict: str) -> None:
+def get_cache_key(sha256: str, config: Config) -> str:
+    """Bind cached verdicts to the relevant static-analysis and AI settings."""
+    model = {"path": config.default_model}
+    if config.default_model:
+        try:
+            stat = Path(config.default_model).stat()
+            model.update({"size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
+        except OSError:
+            model["unavailable"] = True
+    settings = {
+        "version": 2,
+        "sha256": sha256,
+        "keywords": config.suspicious_keywords,
+        "max_strings": config.max_strings,
+        "entropy_threshold": config.entropy_threshold,
+        "ai_params": config.ai_params,
+        "model": model,
+    }
+    return hashlib.sha256(json.dumps(settings, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def cache_result(cache_key: str, sha256: str, report: str, info: Dict[str, Any], ai_verdict: str) -> None:
     """Store analysis result in cache as JSON."""
-    cache_path = get_cache_path(sha256)
+    cache_path = get_cache_path(cache_key)
     data = {
         "sha256": sha256,
         "report": report,
@@ -455,15 +493,15 @@ def cache_result(sha256: str, report: str, info: Dict[str, Any], ai_verdict: str
         json.dump(data, f, indent=2)
 
 
-def load_cache(sha256: str) -> Optional[Dict[str, Any]]:
+def load_cache(cache_key: str) -> Optional[Dict[str, Any]]:
     """Load cached result if it exists; return None otherwise."""
-    cache_path = get_cache_path(sha256)
+    cache_path = get_cache_path(cache_key)
     if cache_path.exists():
         try:
             with open(cache_path, "r") as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Ignoring unreadable cache entry: {e}")
     return None
 
 
@@ -473,8 +511,9 @@ def analyse_file(file_path: Path, config: Config, use_cache: bool = True) -> Dic
     Returns a dict with report, info, ai_verdict, sha256, timestamp.
     """
     sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
+    cache_key = get_cache_key(sha256, config)
     if use_cache and config.cache_enabled:
-        cached = load_cache(sha256)
+        cached = load_cache(cache_key)
         if cached:
             logger.info("Using cached result")
             return cached
@@ -489,7 +528,7 @@ def analyse_file(file_path: Path, config: Config, use_cache: bool = True) -> Dic
         "timestamp": time.time()
     }
     if config.cache_enabled:
-        cache_result(sha256, report_str, info, ai_verdict)
+        cache_result(cache_key, sha256, report_str, info, ai_verdict)
     return result
 
 
@@ -548,7 +587,11 @@ class CursesApp:
 
     def handle_key(self, key):
         """Handle keyboard input with scroll support for reports."""
-        if key == curses.KEY_UP:
+        if self.current_result and key in (27, curses.KEY_BACKSPACE, 127):
+            self.current_result = None
+            self.report_lines = []
+            self.scroll_offset = 0
+        elif key == curses.KEY_UP:
             if self.current_result:
                 self.scroll_offset = max(0, self.scroll_offset - 1)
             else:
@@ -775,10 +818,13 @@ class CursesApp:
             return
         model_path = Path(path_str)
         if model_path.exists():
+            load_model(str(model_path), self.config)
+            if _llama is None:
+                self.show_message("Model could not be loaded. See analyser.log.", is_error=True)
+                return
             self.config.default_model = str(model_path)
             self.config.save()
-            load_model(str(model_path), self.config)
-            self.show_message(f"Model set to {model_path}")
+            self.show_message(f"Model loaded: {model_path}")
         else:
             self.show_message("Model file not found.", is_error=True)
 
@@ -816,4 +862,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()                                  
+    main()  
