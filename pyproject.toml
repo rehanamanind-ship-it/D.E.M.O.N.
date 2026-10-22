@@ -1,0 +1,33 @@
+[project]
+name = "demon-analyser"
+version = "2.0.0"
+description = "D.E.M.O.N. — local-AI powered intent analyser for binaries and scripts"
+authors = [{ name = "Rehan Aman" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.1.7",
+    "rich>=13.7.0",
+    "pefile>=2023.2.7",
+    "pyelftools>=0.29",
+    "macholib>=1.16.2",
+    "dnfile>=0.12.1",
+    "llama-cpp-python>=0.2.0",
+    "huggingface_hub>=0.23.0",
+]
+
+[project.scripts]
+demon = "demon.__main__:cli"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "build", "nuitka>=1.9.0"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["demon"]
+package-dir = { demon = "src" }
+
